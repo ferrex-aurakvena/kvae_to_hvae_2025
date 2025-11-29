@@ -1,0 +1,6 @@
+**/datasets/**
+**/vae/**
+**/.venv/**
+**/__pycache__/**
+**/kvae3d_test_output/**
+

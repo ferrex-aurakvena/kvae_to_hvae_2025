@@ -1,0 +1,22 @@
+# Core deep learning stack
+torch>=2.3.0
+torchvision>=0.18.0
+
+# Hugging Face ecosystem (Hunyuan VAE, etc.)
+diffusers>=0.35.0
+transformers>=4.46.0
+safetensors>=0.4.5
+huggingface-hub>=0.24.0
+
+# Video + array handling
+numpy>=1.26.0
+decord>=0.6.0
+
+# Compression + utilities
+zstandard>=0.22.0
+tqdm>=4.66.0
+
+# KVAE-3D requirement
+einops
+av
+
