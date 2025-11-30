@@ -51,3 +51,16 @@ class HunyuanToKVAEAdapter(nn.Module):
         z_k_hat = self.out_proj(h)
         return z_k_hat
 
+
+class KVAEToHunyuanAdapter(HunyuanToKVAEAdapter):
+    """
+    Same architecture as HunyuanToKVAEAdapter, but semantically KVAE-3D -> Hunyuan.
+
+    Input:  [B, 16, T', H', W']
+    Output: [B, 16, T', H', W']
+    """
+
+    # We inherit everything; only the semantic direction is different.
+    # Forward is identical: input tensor -> adapted tensor.
+    pass
+
