@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import List, Tuple
+from typing import List
 
 import torch
 import torch.nn.functional as F_torch
@@ -221,8 +221,8 @@ def evaluate_pixel_metrics(
 
     Assumes the latent directory mirrors the video directory structure, i.e.:
 
-      videos_root / rel.with_suffix(".avi")
-      latent_root / rel.with_suffix(".safetensors.zst")
+      videos_root / <class>/<video>.avi
+      latent_root / <class>/<video>.safetensors.zst
     """
     adapter_h2k.eval()
     adapter_k2h.eval()
@@ -237,7 +237,6 @@ def evaluate_pixel_metrics(
     k_dtype = next(kvae.parameters()).dtype
 
     # KVAE decode uses split_list; for 33-frame clips and seg_len=16 we know it is [17, 16].
-    # (This matches KVAE3D.encode's splitting for T=33, seg_len=16.)
     kvae_split_list: List[int] = [17, 16]
 
     n = 0
@@ -246,22 +245,29 @@ def evaluate_pixel_metrics(
     sum_psnr_orig_h2k2k = 0.0
     sum_psnr_orig_k2h2h = 0.0
 
-    for idx, latent_path in enumerate(tqdm(files, desc="Pixel eval", leave=False)):
+    for latent_path in tqdm(files, desc="Pixel eval", leave=False):
         if n >= num_pixel_samples:
             break
 
         # map latent path -> video path
-        rel = latent_path.relative_to(latent_root)
-        video_path: Path | None = None
+        rel = latent_path.relative_to(latent_root)  # e.g. ApplyEyeMakeup/v_... .safetensors.zst
+        # Strip both ".zst" and ".safetensors" to recover the raw video stem
+        stem_once = rel.stem                      # removes .zst -> "v_... .safetensors"
+        base_stem = Path(stem_once).stem          # removes .safetensors -> "v_... "
+        rel_parent = rel.parent
 
+        video_path: Path | None = None
         for ext in VIDEO_EXTS:
-            candidate = videos_root / rel.with_suffix(ext)
+            candidate = videos_root / rel_parent / (base_stem + ext)
             if candidate.exists():
                 video_path = candidate
                 break
 
         if video_path is None:
-            print(f"[WARN] No video file found for latent {latent_path}, skipping.")
+            print(
+                f"[WARN] No video file found for latent {latent_path}, "
+                f"expected something like {videos_root / rel_parent / (base_stem + '.avi')}."
+            )
             continue
 
         # load latents
@@ -506,3 +512,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

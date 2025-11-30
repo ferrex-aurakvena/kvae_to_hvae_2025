@@ -34,7 +34,7 @@ We do this by training an adapter:
 
 where:
 
-- `z_h_raw` is the **unscaled** Hunyuan latent (before VAE scaling_factor),  
+- `z_h_raw` is the **unscaled** Hunyuan latent (before VAE `scaling_factor`),  
 - `z_k` is the KVAE-3D latent,  
 - both are 3D latent grids of shape `[C=16, T', H', W']`.
 
@@ -71,8 +71,9 @@ In other words, a user could, in principle, run a **Hunyuan or Kandinsky pipelin
 ```text
 kvae_to_hvae_2025/
   datasets/
-    UCF101/                 # UCF101 videos (train/test split)
+    UCF101/                 # UCF101 videos (train/test/val split)
     UCF101_latents_33/      # Extracted latent pairs (Hunyuan + KVAE), .safetensors.zst
+    UCF101_val_latents_33/  # Extracted latent pairs for UCF101 val
   vae/
     hvae_2025.safetensors   # Hunyuan Video VAE weights (local)
     kvae_3d_2025.safetensors# KVAE-3D VAE weights (local)
@@ -84,6 +85,7 @@ kvae_to_hvae_2025/
     extract_latents_ucf101_zstd.py  # UCF101 → latent pairs extraction
     test_kvae3d_ucf101.py          # KVAE-3D reconstruction sanity check
     train_adapter.py               # Train both adapters jointly
+    eval_adapter_ucf101_val.py     # Validation on UCF101 val (latent + pixel)
   latent_io.py             # zstd+safetensors I/O for latent pairs
   requirements.txt
   README.md
@@ -128,6 +130,8 @@ Result:
 * **10,000** clips processed
 * **0** failures
 * Latents under `datasets/UCF101_latents_33`
+
+We use the **train+test** split of UCF101 for training latents, and the **val** split for evaluation (`datasets/UCF101_val_latents_33`).
 
 ---
 
@@ -178,7 +182,7 @@ python scripts/train_adapter.py \
   --device cuda
 ```
 
-Final reported training metrics (250 epochs, 10k clips, batch size 512):
+Final reported **training** metrics (250 epochs, 10k clips, batch size 512):
 
 ```text
 Epoch 250/250 - H→K MSE: 0.328768 | K→H MSE: 0.380549
@@ -187,6 +191,73 @@ Saved KVAE→Hunyuan adapter to:   adapter_kvae3d_to_hunyuan.safetensors
 ```
 
 These are average *latent-space* MSEs over the full training set.
+
+---
+
+## Validation on UCF101 Val
+
+We hold out the official **UCF101 `val/` split** for evaluation. For each val clip, we extracted paired latents into:
+
+* `datasets/UCF101_val_latents_33`
+
+and kept the raw videos under:
+
+* `datasets/UCF101/val`
+
+Validation is done with:
+
+```bash
+python scripts/eval_adapter_ucf101_val.py \
+  --latent-root datasets/UCF101_val_latents_33 \
+  --videos-root datasets/UCF101/val \
+  --adapter-h2k adapter_hunyuan_to_kvae3d.safetensors \
+  --adapter-k2h adapter_kvae3d_to_hunyuan.safetensors \
+  --device cuda \
+  --max-samples 2000 \
+  --num-pixel-samples 128
+```
+
+### Latent-Space Metrics (val)
+
+On 1,673 val latent pairs:
+
+```text
+Samples:                 1673
+H→K MSE:                 0.329531
+K→H MSE:                 0.382529
+H cycle (H→K→H) MSE:     0.314848
+K cycle (K→H→K) MSE:     0.306932
+```
+
+Interpretation:
+
+* The adapters clearly learn a meaningful latent mapping (MSE well below “random”).
+* The cycles are slightly better than direct mappings, indicating both directions are gently projecting into a shared, stable subspace rather than exploding when composed.
+
+### Pixel-Space Metrics (val)
+
+For 128 randomly selected val clips, we compare decodes in **m11** pixel space (`[-1, 1]` mapped to `[0,1]` for PSNR):
+
+```text
+Samples:                         128
+orig vs Hunyuan(z_h):            31.12 dB
+orig vs KVAE(z_k):               32.07 dB
+orig vs KVAE(H→K(z_h)):          18.85 dB
+orig vs Hunyuan(K→H(z_k)):       20.52 dB
+```
+
+Where:
+
+* `Hunyuan(z_h)` is the direct Hunyuan VAE recon from its own latent.
+* `KVAE(z_k)` is the direct KVAE-3D recon from its own latent.
+* `KVAE(H→K(z_h))` is Hunyuan latent mapped through the H→K adapter, then decoded by KVAE-3D.
+* `Hunyuan(K→H(z_k))` is KVAE latent mapped through the K→H adapter, then decoded by Hunyuan.
+
+Observations:
+
+* Direct decodes from each VAE are strong (≈31–32 dB PSNR vs original).
+* Cross-decoding via adapters is noticeably more lossy (≈19–21 dB vs original), reflecting the inherent difficulty of aligning two different VAE latent spaces with a small 1×1×1 ResNet and pure latent MSE.
+* For downstream use, what ultimately matters is **decode-vs-decode** similarity (e.g., Hunyuan(z_h) vs KVAE(H→K(z_h))) and visual quality in generative pipelines. Those comparisons are planned for future experiments.
 
 ---
 
@@ -220,14 +291,20 @@ Target downstream uses include:
 
 1. **Kandinsky 5 Pro T2V SFT 10s**
 
-   * Replace Hunyuan decode with `KVAE-3D decode ∘ (Hunyuan→KVAE adapter)`.
+   * Replace Hunyuan decode with:
+
+     ```text
+     KVAE-3D decode ∘ (Hunyuan→KVAE adapter)
+     ```
+
 2. **Hunyuan Video**
 
-   * Same idea: use KVAE-3D as a drop-in decoder for better recon/temporal behavior.
+   * Same idea: use KVAE-3D as a drop-in decoder for improved recon / temporal behavior.
+
 3. **Single-VAE / low-VRAM mode**
 
    * Encode/Decode with KVAE-3D only
-   * Use KVAE→Hunyuan adapter to communicate with Hunyuan-trained DiTs.
+   * Use the KVAE→Hunyuan adapter to communicate with Hunyuan-trained DiTs.
 
 The actual pipeline glue (e.g., a `HybridVAE` class) will live in whichever project consumes these adapters (Kandinsky / Hunyuan forks, custom UIs, etc.).
 
@@ -253,12 +330,21 @@ pip install -r requirements.txt
 
 ---
 
-## Status
+## Status: Complete
 
 * ✅ KVAE-3D loader implemented locally
-* ✅ Paired latent extraction from UCF101 (~10k clips)
+
+* ✅ Paired latent extraction from UCF101 (10k train/test clips + val set)
+
 * ✅ Bidirectional adapters trained:
 
   * Hunyuan → KVAE-3D
   * KVAE-3D → Hunyuan
+
+* ✅ Validation on UCF101 val in latent and pixel space
+
+Next steps (outside this repository):
+
+* Integration with Kandinsky 5 / Hunyuan pipelines as a hybrid VAE
+
 
