@@ -1,6 +1,3 @@
-Here’s a first-pass `README.md` you can drop straight into the repo and tweak later as things evolve:
-
-````markdown
 # KVAE-3D ↔ Hunyuan Video VAE Adapters
 
 This repository trains **latent-to-latent adapters** between:
